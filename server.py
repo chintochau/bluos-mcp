@@ -99,20 +99,69 @@ async def list_tools() -> list[Tool]:
             inputSchema={"type": "object", "properties": _player_ip_param()},
         ),
         Tool(
+            name="browse_presets",
+            description=(
+                "Browse available preset sources on a BluOS player. "
+                "Use this to find playlists, stations, live radio, and inputs that can be saved as presets. "
+                "Call with no arguments to get the top-level list of sources (Apple Music, Tidal, Radio, Inputs, etc.). "
+                "Then drill into a source by passing the url and service from a result. "
+                "Items with type='audio' are ready to save — pass their url and image to presets: save. "
+                "Items with type='link' need another browse call to go deeper. "
+                "IMPORTANT: Albums cannot be saved as presets directly. If the user wants an album as a preset, "
+                "say 'Since BluOS presets don't support albums directly, I'll play it, save it as a local playlist, "
+                "then save that as your preset' — then do: play_music, queue_manage save, local_playlists save_as_preset."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    **_player_ip_param(),
+                    "url": {
+                        "type": "string",
+                        "description": "URL from a previous browse_presets result. Omit to get top-level sources.",
+                    },
+                    "service": {
+                        "type": "string",
+                        "description": "Service from a previous browse_presets result (e.g. 'AppleMusic', 'Tidal'). Include when drilling into a service.",
+                    },
+                },
+            },
+        ),
+        Tool(
             name="presets",
-            description="List saved presets and radio stations, or play one by ID.",
+            description=(
+                "List saved presets, play one by ID, save an item as a preset, or delete a preset. "
+                "To save: use browse_presets to find an audio item, then call this with action=save passing its url and image. "
+                "Albums cannot be saved directly — use the local playlist workaround instead."
+            ),
             inputSchema={
                 "type": "object",
                 "properties": {
                     **_player_ip_param(),
                     "action": {
                         "type": "string",
-                        "enum": ["list", "play"],
-                        "description": "list: return all presets. play: start the preset with the given id.",
+                        "enum": ["list", "play", "save", "delete"],
+                        "description": (
+                            "list: return all presets. "
+                            "play: start the preset with the given id. "
+                            "save: save an item as a preset — requires id, name, and url. "
+                            "delete: remove a preset by id."
+                        ),
                     },
                     "id": {
                         "type": "integer",
-                        "description": "Preset ID to play. Required when action is 'play'.",
+                        "description": "Preset slot number. Required for action=play, save, or delete.",
+                    },
+                    "name": {
+                        "type": "string",
+                        "description": "Name for the preset. Required for action=save.",
+                    },
+                    "url": {
+                        "type": "string",
+                        "description": "URL of the item to save, from a browse_presets audio result. Required for action=save.",
+                    },
+                    "image": {
+                        "type": "string",
+                        "description": "Image URL from a browse_presets result. Optional for action=save.",
                     },
                 },
                 "required": ["action"],
@@ -151,6 +200,85 @@ async def list_tools() -> list[Tool]:
                     },
                 },
                 "required": ["query", "service", "type"],
+            },
+        ),
+        Tool(
+            name="local_playlists",
+            description=(
+                "List and play playlists saved on the BluOS player itself. "
+                "These are different from streaming service playlists (Tidal, Apple Music, etc.) — "
+                "a BluOS local playlist can contain tracks mixed from any service. "
+                "When the user says 'my playlist', 'play my queue', or mentions a playlist by name "
+                "without specifying a service, try this first."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    **_player_ip_param(),
+                    "action": {
+                        "type": "string",
+                        "enum": ["list", "play", "save_as_preset"],
+                        "description": (
+                            "list: return all playlists saved on the BluOS player with their IDs and names. "
+                            "play: start playing a playlist by its ID (get IDs from list). "
+                            "save_as_preset: save a local playlist to a BluOS preset slot by ID."
+                        ),
+                    },
+                    "playlist_id": {
+                        "type": "string",
+                        "description": "Playlist ID from the list action. Required for action=play and save_as_preset.",
+                    },
+                    "preset_id": {
+                        "type": "integer",
+                        "description": "Preset slot number (1-6). Required for action=save_as_preset.",
+                    },
+                    "name": {
+                        "type": "string",
+                        "description": "Name for the preset. For save_as_preset only. If omitted, uses the playlist name.",
+                    },
+                },
+                "required": ["action"],
+            },
+        ),
+        Tool(
+            name="queue_manage",
+            description=(
+                "Manage the current play queue on a BluOS player: "
+                "remove a track by position, reorder tracks, clear the queue, "
+                "or save the current queue as a named local playlist."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    **_player_ip_param(),
+                    "action": {
+                        "type": "string",
+                        "enum": ["remove", "reorder", "clear", "save"],
+                        "description": (
+                            "remove: delete a track at the given index. "
+                            "reorder: move a track from from_index to to_index. "
+                            "clear: empty the entire queue. "
+                            "save: save the current queue as a named local playlist."
+                        ),
+                    },
+                    "index": {
+                        "type": "integer",
+                        "description": "0-based track position in the queue. Required for action=remove.",
+                    },
+                    "from_index": {
+                        "type": "integer",
+                        "description": "Current 0-based position of the track to move. Required for action=reorder.",
+                    },
+                    "to_index": {
+                        "type": "integer",
+                        "description": "Target 0-based position to move the track to. Required for action=reorder.",
+                    },
+                    "name": {
+                        "type": "string",
+                        "description": "Name for the saved playlist. Required for action=save.",
+                    },
+                },
+                "required": ["action"],
             },
         ),
         Tool(
@@ -222,11 +350,71 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             result = await _client(arguments).set_volume(arguments["level"])
         elif name == "get_queue":
             result = await _client(arguments).get_queue()
+        elif name == "browse_presets":
+            result = await _client(arguments).browse_presets(
+                arguments.get("url"),
+                arguments.get("service"),
+            )
         elif name == "presets":
-            if arguments["action"] == "list":
-                result = await _client(arguments).get_presets()
+            action = arguments["action"]
+            client = _client(arguments)
+            if action == "list":
+                result = await client.get_presets()
+            elif action == "play":
+                result = await client.play_preset(arguments["id"])
+            elif action == "save":
+                if "url" in arguments:
+                    url = arguments["url"]
+                    if any(url.startswith(p) for p in ("/Albums", "/Songs", "/Add?", "/Artists")):
+                        result = {"error": (
+                            "Albums and songs cannot be saved as presets directly. "
+                            "To save an album as a preset: (1) play_music the album, "
+                            "(2) queue_manage save it as a local playlist, "
+                            "(3) local_playlists save_as_preset to the desired slot. "
+                            "Tell the user: 'Since BluOS presets don't support albums directly, "
+                            "I'll play it, save it as a local playlist, then save that as your preset.'"
+                        )}
+                    else:
+                        result = await client.save_preset(
+                            arguments["id"],
+                            arguments["name"],
+                            url,
+                            arguments.get("image"),
+                        )
+                else:
+                    result = await client.save_preset_from_status(arguments["id"], arguments.get("name"))
+            elif action == "delete":
+                result = await client.delete_preset(arguments["id"])
             else:
-                result = await _client(arguments).play_preset(arguments["id"])
+                result = {"error": f"Unknown action: {action}"}
+        elif name == "queue_manage":
+            action = arguments["action"]
+            client = _client(arguments)
+            if action == "remove":
+                result = await client.queue_remove(arguments["index"])
+            elif action == "reorder":
+                result = await client.queue_reorder(arguments["from_index"], arguments["to_index"])
+            elif action == "clear":
+                result = await client.queue_clear()
+            elif action == "save":
+                result = await client.queue_save(arguments["name"])
+            else:
+                result = {"error": f"Unknown action: {action}"}
+        elif name == "local_playlists":
+            action = arguments["action"]
+            client = _client(arguments)
+            if action == "list":
+                result = await client.list_local_playlists()
+            elif action == "play":
+                result = await client.play_local_playlist(arguments["playlist_id"])
+            elif action == "save_as_preset":
+                result = await client.save_local_playlist_as_preset(
+                    arguments["playlist_id"],
+                    arguments["preset_id"],
+                    arguments.get("name"),
+                )
+            else:
+                result = {"error": f"Unknown action: {action}"}
         elif name == "get_music_services":
             result = await _client(arguments).get_music_services()
         elif name == "search_music":

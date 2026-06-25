@@ -117,47 +117,62 @@ class BluOSClient:
         root = await self._get("/Preset", params={"id": preset_id})
         return {"result": root.text or "ok"}
 
-    async def browse_content(self, query: str, service: str, type: str) -> dict:
-        endpoint_map = {"albums": "/Albums", "songs": "/Songs", "artists": "/Artists"}
-        endpoint = endpoint_map.get(type)
-        if not endpoint:
-            return {"error": f"type must be one of: {', '.join(endpoint_map)}"}
+    async def delete_preset(self, preset_id: int) -> dict:
+        await self._get("/SetPreset", params={"id": preset_id, "delete": 1})
+        return {"result": "deleted", "preset_id": preset_id}
 
-        root = await self._get(endpoint, params={"expr": f'"{query}"', "service": service})
+    async def browse_presets(self, url: str = None, service: str = None) -> dict:
+        if url is None:
+            root = await self._get("/RadioBrowse", params={"service": "Presets"})
+        else:
+            params = {"url": url}
+            if service:
+                params["service"] = service
+            root = await self._get("/RadioBrowse", params=params)
 
-        if type == "albums":
-            items = []
-            for album in root.findall("album"):
-                items.append({
-                    "title": album.findtext("title"),
-                    "artist": album.findtext("art"),
-                    "date": album.get("date"),
-                    "tracks": album.get("tracks"),
-                    "uri": f"/Albums?service={service}&albumid={album.get('albumid')}",
-                })
-            items.sort(key=lambda a: a["date"] or "", reverse=True)
-            return {"type": "albums", "total": len(items), "results": items}
+        items = []
+        for item in root.findall("item"):
+            items.append({
+                "text": item.get("text"),
+                "type": item.get("type"),
+                "url": item.get("URL"),
+                "service": item.get("service"),
+                "key": item.get("key"),
+                "image": item.get("image"),
+            })
+        return {"items": items}
 
-        if type == "songs":
-            items = []
-            for song in root.findall(".//song"):
-                fn = song.findtext("fn")
-                items.append({
-                    "title": song.findtext("title"),
-                    "artist": song.findtext("art"),
-                    "album": song.findtext("alb"),
-                    "uri": f"/Add?playnow=1&file={fn}" if fn else None,
-                })
-            return {"type": "songs", "total": len(items), "results": items}
+    async def save_preset(self, preset_id: int, name: str, encoded_url: str, image: str = None) -> dict:
+        params = {"id": preset_id, "name": name, "encoded_url": encoded_url}
+        if image:
+            params["image"] = image
+        await self._get("/SetPreset", params=params)
+        return {"result": "saved", "preset_id": preset_id, "name": name}
 
-        if type == "artists":
-            items = []
-            for artist in root.findall("art"):
-                items.append({
-                    "name": artist.text,
-                    "uri": f"/Artists?service={service}&artistid={artist.get('artistid')}",
-                })
-            return {"type": "artists", "total": len(items), "results": items}
+    async def save_preset_from_status(self, preset_id: int, name: str = None) -> dict:
+        status = await self._get("/Status")
+        source_url = (
+            status.findtext("fn")
+            or status.findtext("trackstationid")
+            or status.findtext("streamUrl")
+        )
+        if not source_url:
+            return {"error": "Nothing is playing or the current source cannot be saved as a preset."}
+        if not name:
+            artist = status.findtext("artist")
+            title = status.findtext("name")
+            if artist and title:
+                name = f"{artist} - {title}"
+            elif title:
+                name = title
+            else:
+                name = f"Preset {preset_id}"
+        image = status.findtext("image")
+        params = {"id": preset_id, "name": name, "encoded_url": source_url}
+        if image:
+            params["image"] = image
+        await self._get("/SetPreset", params=params)
+        return {"result": "saved", "preset_id": preset_id, "name": name}
 
     async def get_music_services(self) -> list[dict]:
         root = await self._get("/ui/Search", params={"playnum": 1})
@@ -187,12 +202,14 @@ class BluOSClient:
         if type == "albums":
             items = []
             for album in root.findall("album"):
+                albumid = album.get("albumid")
                 items.append({
                     "title": album.findtext("title"),
                     "artist": album.findtext("art"),
                     "date": album.get("date"),
                     "tracks": album.get("tracks"),
-                    "uri": f"/Albums?service={service}&albumid={album.get('albumid')}",
+                    "uri": f"/Albums?service={service}&albumid={albumid}",
+                    "image": f"/Artwork?service={service}&albumid={albumid}" if albumid else None,
                 })
             items.sort(key=lambda a: a["date"] or "", reverse=True)
             return {"type": "albums", "total": len(items), "results": items}
@@ -201,11 +218,13 @@ class BluOSClient:
             items = []
             for song in root.findall(".//song"):
                 fn = song.findtext("fn")
+                songid = song.findtext("songid") or (fn.split(":")[-1] if fn else None)
                 items.append({
                     "title": song.findtext("title"),
                     "artist": song.findtext("art"),
                     "album": song.findtext("alb"),
                     "uri": f"/Add?playnow=1&file={fn}" if fn else None,
+                    "image": f"/Artwork?service={service}&songid={service}%3A{songid}" if songid else None,
                 })
             return {"type": "songs", "total": len(items), "results": items}
 
@@ -217,6 +236,64 @@ class BluOSClient:
                     "uri": f"/Artists?service={service}&artistid={artist.get('artistid')}",
                 })
             return {"type": "artists", "total": len(items), "results": items}
+
+    async def list_local_playlists(self) -> dict:
+        root = await self._get("/Playlists", params={"service": "LocalMusic"})
+        playlists = []
+        for name_el in root.findall("name"):
+            name = name_el.text
+            if name:
+                playlists.append({"id": name, "name": name})
+        return {"playlists": playlists}
+
+    async def play_local_playlist(self, playlist_id: str) -> dict:
+        await self._get("/Add", params={
+            "service": "LocalMusic",
+            "playnow": 1,
+            "playlistid": playlist_id,
+            "all": 1,
+        })
+        return {"result": "playing", "playlist_id": playlist_id}
+
+    async def save_local_playlist_as_preset(self, playlist_id: str, preset_id: int, name: str = None) -> dict:
+        root = await self._get("/Playlists", params={"service": "LocalMusic"})
+
+        playlist_name = None
+        image_url = None
+        for name_el in root.findall("name"):
+            if name_el.text == playlist_id:
+                playlist_name = name_el.text
+                image_url = name_el.get("image")
+                break
+
+        if not name:
+            name = playlist_name or f"Playlist {playlist_id}"
+
+        from urllib.parse import quote
+        encoded_url = f"/Load?name={quote(playlist_id)}"
+
+        params = {"id": preset_id, "name": name, "encoded_url": encoded_url}
+        if image_url:
+            params["image"] = image_url
+
+        await self._get("/SetPreset", params=params)
+        return {"result": "saved", "preset_id": preset_id, "name": name, "encoded_url": encoded_url, "image": image_url}
+
+    async def queue_remove(self, index: int) -> dict:
+        root = await self._get("/Delete", params={"id": index})
+        return {"result": "removed", "length": root.get("length")}
+
+    async def queue_reorder(self, from_index: int, to_index: int) -> dict:
+        await self._get("/Move", params={"old": from_index, "new": to_index})
+        return {"result": "reordered"}
+
+    async def queue_clear(self) -> dict:
+        await self._get("/Clear")
+        return {"result": "cleared"}
+
+    async def queue_save(self, name: str) -> dict:
+        await self._get("/Save", params={"name": name})
+        return {"result": "saved", "name": name}
 
     async def play_music(self, uri: str, add_to_queue: bool = False) -> dict:
         # Songs: uri is already /Add?playnow=1&file=...
