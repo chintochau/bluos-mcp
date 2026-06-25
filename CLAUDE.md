@@ -18,7 +18,8 @@ Claude Code -> stdio -> MCP Server (server.py on your Mac) -> HTTP:11000 -> BluO
 - Base URL: `http://<player_ip>:11000`
 - No authentication required (local network only)
 - Responses are XML (SDUI endpoints may return JSON or XML)
-- **Reference implementation**: `/Users/jasonchau/projects/electron-player-controller` — look here for correct endpoint paths, query params, and response shapes when adding new tools
+- **Primary reference**: `/Users/jasonchau/projects/desktop_app_v2` — most complete BluOS controller implementation. Check `packages/renderer/src/api/` for correct endpoint paths, query params, request/response shapes, and parsers before adding any new tool.
+- **Secondary reference**: `/Users/jasonchau/projects/electron-player-controller` — older reference, still useful for simpler endpoint examples
 
 ### Known Endpoints
 
@@ -70,21 +71,20 @@ Claude Code -> stdio -> MCP Server (server.py on your Mac) -> HTTP:11000 -> BluO
 |------|---------------|-------------|
 | discover_players | mDNS `_musc._tcp.local` + GET /SyncStatus | Find all players on network, returns friendly names and IPs |
 | get_status | GET /Status | Current track, playback state, volume |
-| play | GET /Play | Start or resume playback |
-| pause | GET /Pause | Pause playback |
-| skip | GET /Skip | Next track |
-| back | GET /Back | Previous track |
+| transport | GET /Play, /Pause, /Skip, /Back | Playback control (action: play/pause/skip/back) |
 | set_volume | GET /Volume?level=X | Set volume 0-100 |
 | get_queue | GET /ui/Queue?playnum=1 | Current play queue |
-| get_presets | GET /Presets | Saved presets and radio stations |
-| play_preset | GET /Preset?id=X | Play a preset by ID |
+| presets | GET /Presets, GET /Preset?id=X | List presets or play one by ID (action: list/play) |
+| get_music_services | GET /ui/Search?playnum=1 | List available streaming services (Tidal, Qobuz, etc.) |
+| search_music | GET /Albums, /Songs, /Artists?expr=X | Search full catalog with release dates, sorted newest-first |
+| play_music | GET /Add?playnow=1, GET /Songs?albumid=X | Play a song or full album from a search_music URI |
 
-All playback tools accept an optional `ip` parameter. If omitted, the first discovered player is used. The AI resolves player names to IPs using the discover_players result.
+All tools accept an optional `ip` parameter. If omitted and only one player is found, it is used automatically. If multiple players exist, the server returns an error listing them so the AI can ask the user to pick one.
 
 ## Player Discovery Flow
 1. On startup, server auto-discovers via mDNS (or uses `BLUOS_PLAYER_IP` env var if set)
-2. Friendly names are fetched from `/SyncStatus` on each discovered player
-3. AI calls `discover_players` to get the full list, then passes the correct IP to each tool
+2. Discovery runs once and is cached — subsequent tool calls use the cached result
+3. `discover_players` can be called explicitly to refresh the player list
 
 ## Project Structure
 ```

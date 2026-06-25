@@ -26,12 +26,21 @@ def _client(arguments: dict) -> BluOSClient:
     raise RuntimeError("No BluOS players found on the network.")
 
 
-PLAYER_IP_PARAM = {
-    "ip": {
-        "type": "string",
-        "description": "IP address of the player. Use the IP from discover_players. If omitted, uses the first discovered player.",
-    }
-}
+def _player_ip_param() -> dict:
+    if len(_discovered_players) == 1:
+        p = _discovered_players[0]
+        description = f"IP address of the target player. Only one player available: {p['name']} ({p['ip']}). Can be omitted."
+    elif len(_discovered_players) > 1:
+        hints = ", ".join(f"{p['name']} ({p['ip']})" for p in _discovered_players)
+        description = (
+            f"IP address of the target player. "
+            f"Available players: {hints}. "
+            f"Pick the best match from context (e.g. 'my player', a room name, or a player name the user mentions). "
+            f"Only ask if genuinely ambiguous."
+        )
+    else:
+        description = "IP address of the player. No players found at startup — call discover_players to scan the network."
+    return {"ip": {"type": "string", "description": description}}
 
 
 @server.list_tools()
@@ -39,13 +48,17 @@ async def list_tools() -> list[Tool]:
     return [
         Tool(
             name="discover_players",
-            description="Scan the local network for BluOS players. Returns a list of players with their friendly names and IP addresses. Call this first to know which players are available.",
+            description=(
+                "Refresh the list of BluOS players on the network. "
+                "Players are already discovered at server startup and embedded in each tool's ip parameter — "
+                "only call this if you need to detect players that came online after the session started."
+            ),
             inputSchema={"type": "object", "properties": {}, "required": []},
         ),
         Tool(
             name="get_status",
             description="Get current track info, playback state, and volume from a BluOS player.",
-            inputSchema={"type": "object", "properties": PLAYER_IP_PARAM},
+            inputSchema={"type": "object", "properties": _player_ip_param()},
         ),
         Tool(
             name="transport",
@@ -53,7 +66,7 @@ async def list_tools() -> list[Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
-                    **PLAYER_IP_PARAM,
+                    **_player_ip_param(),
                     "action": {
                         "type": "string",
                         "enum": ["play", "pause", "skip", "back"],
@@ -69,7 +82,7 @@ async def list_tools() -> list[Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
-                    **PLAYER_IP_PARAM,
+                    **_player_ip_param(),
                     "level": {
                         "type": "integer",
                         "description": "Volume level from 0 to 100.",
@@ -83,7 +96,7 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="get_queue",
             description="Get the current play queue of a BluOS player.",
-            inputSchema={"type": "object", "properties": PLAYER_IP_PARAM},
+            inputSchema={"type": "object", "properties": _player_ip_param()},
         ),
         Tool(
             name="presets",
@@ -91,7 +104,7 @@ async def list_tools() -> list[Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
-                    **PLAYER_IP_PARAM,
+                    **_player_ip_param(),
                     "action": {
                         "type": "string",
                         "enum": ["list", "play"],
@@ -108,7 +121,7 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="get_music_services",
             description="Get the list of music streaming services available on a BluOS player (e.g. Tidal, Qobuz, Amazon). Use this to know which services to search.",
-            inputSchema={"type": "object", "properties": PLAYER_IP_PARAM},
+            inputSchema={"type": "object", "properties": _player_ip_param()},
         ),
         Tool(
             name="search_music",
@@ -122,7 +135,7 @@ async def list_tools() -> list[Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
-                    **PLAYER_IP_PARAM,
+                    **_player_ip_param(),
                     "query": {
                         "type": "string",
                         "description": "Clean search term: artist name, album title, or song title.",
@@ -151,7 +164,7 @@ async def list_tools() -> list[Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
-                    **PLAYER_IP_PARAM,
+                    **_player_ip_param(),
                     "uri": {
                         "type": "string",
                         "description": "The URI from a search_music result (song or album URI).",
@@ -224,7 +237,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             result = {"error": f"Unknown tool: {name}"}
 
     except Exception as e:
-        result = {"error": str(e)}
+        result = {"error": f"{type(e).__name__}: {e}" if str(e) else type(e).__name__}
 
     return [TextContent(type="text", text=json.dumps(result, indent=2))]
 
