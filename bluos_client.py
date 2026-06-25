@@ -88,15 +88,16 @@ class BluOSClient:
     async def get_queue(self) -> dict:
         root = await self._get("/ui/Queue", params={"playnum": 1})
         items = []
-        for song in root.findall("song"):
+        for item in root.findall("item"):
             items.append({
-                "id": song.get("id"),
-                "artist": song.findtext("artist"),
-                "album": song.findtext("album"),
-                "title": song.findtext("title"),
-                "image": song.findtext("image"),
+                "title": item.get("title"),
+                "artist": item.get("subTitle"),
+                "album": item.get("subSubTitle"),
+                "duration": item.get("duration"),
+                "quality": item.get("quality"),
             })
         return {
+            "name": root.get("name"),
             "total": root.get("total"),
             "songs": items,
         }
