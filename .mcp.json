@@ -1,9 +1,3 @@
 {
-  "mcpServers": {
-    "bluos": {
-      "command": "/Users/jasonchau/projects/bluos-mcp/.venv/bin/python",
-      "args": ["/Users/jasonchau/projects/bluos-mcp/server.py"],
-      "type": "stdio"
-    }
-  }
+  "mcpServers": {}
 }
